@@ -6,10 +6,11 @@ from torch import nn
 import torch
 
 class net(nn.Module):
-    def __init__(self, input_dim, num_layers, hlsize):
+    def __init__(self, input_dim, num_layers, hlsize,
+                 conditional_shape=0):
         super(net, self).__init__()
 
-        self.fc = [nn.Linear(input_dim+1, hlsize),
+        self.fc = [nn.Linear(input_dim+1+conditional_shape, hlsize),
                      nn.ReLU()]
         for i in range(num_layers):
             self.fc.append(nn.Linear(hlsize, hlsize))
@@ -24,7 +25,7 @@ class net(nn.Module):
     
 class FlowMatch():
     def __init__(self, data, input_dim, num_layers, hlsize,
-                 lr=0.001, batch_size=1000):
+                 lr=0.001, batch_size=1000, conditional=None):
         self.input_dim = input_dim
         self.num_layers = num_layers
         self.hlsize = hlsize
@@ -32,14 +33,18 @@ class FlowMatch():
         self.batch_size = batch_size
 
         self.data = data
-        self.noise_distribution = np.random.uniform(0, 1, self.data.shape)
+        self.conditional = conditional
+        if self.conditional is not None:
+            self.conditional_shape = self.conditional.shape[1]
+        self.noise_distribution = np.random.normal(0, 1, self.data.shape)
 
-        self.model = net(self.input_dim, self.num_layers, self.hlsize)
+        self.model = net(self.input_dim, self.num_layers, self.hlsize,
+                         conditional_shape=self.conditional_shape)
     
     def train(self, epochs=500, patience=100, sigma0=0.001):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
 
-        def loss(x0, x1, sigma0):
+        def loss(x0, x1, sigma0, conditional=None):
 
             # x0 is noise and x1 is the data distribution
             x0 = torch.tensor(x0)
@@ -54,14 +59,25 @@ class FlowMatch():
             smoothing = sigma0 * noise
             # adding the gaussian noise to the mean
             psi0 = psi0 + smoothing
-            output = self.model(torch.tensor(
-                np.column_stack((psi0, t)).astype(np.float32)))
+            if conditional is None:
+                output = self.model(torch.tensor(
+                    np.column_stack((psi0, t)).astype(np.float32)))
+            else:
+                output = self.model(torch.tensor(
+                    np.column_stack((psi0, 
+                        t, conditional)).astype(np.float32)))
             psi = x1 - x0
             return (output - psi).pow(2).mean()
 
-        train_dataset = TensorDataset(torch.tensor(
-            np.column_stack(
-                (self.noise_distribution, self.data)).astype(np.float32)))
+        if self.conditional is None:
+            train_dataset = TensorDataset(torch.tensor(
+                np.column_stack(
+                    (self.noise_distribution, self.data)).astype(np.float32)))
+        else:
+            train_dataset = TensorDataset(torch.tensor(
+                np.column_stack(
+                    (self.noise_distribution, self.data, 
+                     self.conditional)).astype(np.float32)))
         train_loader = DataLoader(train_dataset, 
                                   batch_size=self.batch_size, shuffle=True)
 
@@ -72,11 +88,19 @@ class FlowMatch():
             loss_over_batch = []
             for batch_X in train_loader:
                 optimizer.zero_grad()
-                l = loss(batch_X[0][:, :2], batch_X[0][:, 2:], sigma0)
+                if self.conditional is None:
+                    l = loss(batch_X[0][:, :self.data.shape[1]], 
+                             batch_X[0][:, self.data.shape[1]:], sigma0)
+                else:
+                    l = loss(batch_X[0][:, :self.data.shape[1]],
+                            batch_X[0][:, self.data.shape[1]:2*self.data.shape[1]],
+                            sigma0, batch_X[0][:, 2*self.data.shape[1]:])
                 l.backward()
                 optimizer.step()
                 loss_over_batch.append(l.item())
-            print('Epoch: ', str(i) + ' Loss: ', np.mean(loss_over_batch), ' Best Loss: ', c, ' Count: ', count)
+            print('Epoch: ', str(i) + ' Loss: ', 
+                np.mean(loss_over_batch), ' Best Loss: ', 
+                c, ' Count: ', count)
             self.loss_history.append(np.mean(loss_over_batch))
             if self.loss_history[-1] < c:
                 c = self.loss_history[-1]
@@ -97,7 +121,7 @@ class FlowMatch():
             return self.model(torch.tensor(np.column_stack((x, 
                     t)).astype(np.float32))).detach().numpy().flatten()
         
-        test_noise_distribution = np.random.uniform(0, 1, 
+        test_noise_distribution = np.random.normal(0, 1, 
                                     (nsamples, self.data.shape[1]))
 
         t = np.linspace(0, 1, time_samples)
