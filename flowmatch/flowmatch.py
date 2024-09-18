@@ -89,7 +89,7 @@ class FlowMatch():
 
         self.model.load_state_dict(best_model)
 
-    def sample(self, nsamples):
+    def sample(self, nsamples, time_samples=10):
         def func(t, x):
             # hmm not sure about this... might not need the psi0 bit...
             x = x.reshape(-1, 2)
@@ -100,9 +100,9 @@ class FlowMatch():
         test_noise_distribution = np.random.uniform(0, 1, 
                                     (nsamples, self.data.shape[1]))
 
-        t = np.linspace(0, 1, 100)
+        t = np.linspace(0, 1, time_samples)
         sol = solve_ivp(func, (0, 1), test_noise_distribution.flatten(), t_eval=t)
-        return sol.y.T.reshape(-1, 100, 2)
+        return sol.y.T.reshape(time_samples, nsamples, self.data.shape[1])
     
     def log_p_base(self, x, reduction='sum', dim=1):
         log_p = -0.5 * torch.log(2. * torch.tensor(np.pi)) - 0.5 * x**2.
@@ -117,6 +117,9 @@ class FlowMatch():
         # backward Euler (see Appendix C in Lipman's paper)
         ts = torch.linspace(1., 0., time_samples)
         delta_t = ts[1] - ts[0]
+
+        if type(x_1) is not torch.Tensor:
+            x_1 = torch.tensor(x_1, dtype=torch.float32)
         
         for t in ts:
             if t == 1.:
