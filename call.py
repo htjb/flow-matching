@@ -11,7 +11,17 @@ samples = dist.rvs(10000)
 plt.show()"""
 
 fm = FlowMatch(samples, 2, 3, 100)
-fm.train()
+fm.train(epochs=100)
 
 samps = fm.sample(1000)
-print(samps)
+plt.scatter(samps[-1, :, 0], samps[-1, :, 1])
+plt.show()
+
+lps = fm.log_prob(samples)
+
+print(samps.shape)
+
+for i in range(samps.shape[0]):
+    if i%1 == 0:
+        plt.plot(samps[i, :, 0], samps[i, :, 1], '.', c='k', alpha=0.2)
+    plt.show()
