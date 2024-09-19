@@ -34,9 +34,23 @@ class FlowMatch():
 
         self.data = data
         self.conditional = conditional
+        self.noise_distribution = np.random.normal(0, 1, self.data.shape)
+
         if self.conditional is not None:
             self.conditional_shape = self.conditional.shape[1]
-        self.noise_distribution = np.random.normal(0, 1, self.data.shape)
+
+            self.conditional = torch.tensor(
+                [[self.conditional[i]]*self.data.shape[1] 
+                for i in range(self.conditional.shape[0])])
+            
+            self.noise_distribution = self.noise_distribution.reshape(
+                self.noise_distribution.shape[0]* 
+                self.noise_distribution.shape[1], -1)
+            self.data = self.data.reshape(
+                self.data.shape[0]*self.data.shape[1], -1)
+            self.conditional = self.conditional.reshape(
+                self.conditional.shape[0]*self.conditional.shape[1], -1)
+            
 
         self.model = net(self.input_dim, self.num_layers, self.hlsize,
                          conditional_shape=self.conditional_shape)
@@ -113,12 +127,18 @@ class FlowMatch():
 
         self.model.load_state_dict(best_model)
 
-    def sample(self, nsamples, time_samples=10):
+    def sample(self, nsamples, time_samples=10, conditional=None):
         def func(t, x):
             # hmm not sure about this... might not need the psi0 bit...
             x = x.reshape(-1, 2)
             t = np.array([t]*len(x)).reshape(-1, 1)
-            return self.model(torch.tensor(np.column_stack((x, 
+            if conditional is not None:
+                cc = np.array(
+                    [conditional]*len(x)).reshape(-1, self.conditional_shape)
+                return self.model(torch.tensor(np.column_stack((x, 
+                    t, cc)).astype(np.float32))).detach().numpy().flatten()
+            else:
+                return self.model(torch.tensor(np.column_stack((x, 
                     t)).astype(np.float32))).detach().numpy().flatten()
         
         test_noise_distribution = np.random.normal(0, 1, 
@@ -137,7 +157,7 @@ class FlowMatch():
         else:
             return log_p
     
-    def log_prob(self, x_1, reduction=None, time_samples=10):
+    def log_prob(self, x_1, reduction=None, time_samples=10, conditional=None):
         # backward Euler (see Appendix C in Lipman's paper)
         ts = torch.linspace(1., 0., time_samples)
         delta_t = ts[1] - ts[0]
@@ -152,7 +172,13 @@ class FlowMatch():
             else:
                 # Calculate phi_t
                 t_embedding = torch.Tensor([t]*len(x_t)).reshape(-1, 1)
-                data_stack = torch.cat((x_t, t_embedding), dim=1)
+                if conditional is not None:
+                    conditionals = np.array([conditional]*len(x_t))
+                    conditionals = torch.tensor(conditionals, 
+                        dtype=torch.float32).reshape(-1, self.conditional_shape)
+                    data_stack = torch.cat((x_t, t_embedding, conditionals), dim=1)
+                else:
+                    data_stack = torch.cat((x_t, t_embedding), dim=1)
                 x_t =x_t - self.model(data_stack) * delta_t
                 
                 # Calculate f_t
